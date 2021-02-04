@@ -497,6 +497,16 @@ func (s *Shell) DeleteCmd(name string) {
 	s.rootCmd.DeleteCmd(name)
 }
 
+// LineTerminator sets the line terminator to the given one.
+func (s *Shell) LineTerminator() string {
+	return s.lineTerminator
+}
+
+// SetLineTerminator sets the line terminator to the given one.
+func (s *Shell) SetLineTerminator(terminator string) {
+	s.lineTerminator = terminator
+}
+
 // NotFound adds a generic function for all inputs.
 // It is called if the shell input could not be handled by any of the
 // added commands.

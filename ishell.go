@@ -41,29 +41,30 @@ var (
 
 // Shell is an interactive cli shell.
 type Shell struct {
-	rootCmd           *Cmd
-	generic           func(*Context)
-	interrupt         func(*Context, int, string)
-	interruptCount    int
-	eof               func(*Context)
-	reader            *shellReader
-	writer            io.Writer
-	active            bool
-	activeMutex       sync.RWMutex
-	ignoreCase        bool
-	customCompleter   bool
-	multiChoiceActive bool
-	haltChan          chan struct{}
-	historyFile       string
-	autoHelp          bool
-	rawArgs           []string
-	progressBar       ProgressBar
-	pager             string
-	pagerArgs         []string
-	isUninterpreted   bool
-	lineTerminator    string
-	mysqlShellCmds    []string
-	quitKeywords      []string
+	rootCmd            *Cmd
+	generic            func(*Context)
+	interrupt          func(*Context, int, string)
+	interruptCount     int
+	eof                func(*Context)
+	reader             *shellReader
+	writer             io.Writer
+	active             bool
+	activeMutex        sync.RWMutex
+	ignoreCase         bool
+	customCompleter    bool
+	multiChoiceActive  bool
+	haltChan           chan struct{}
+	historyFile        string
+	autoHelp           bool
+	rawArgs            []string
+	progressBar        ProgressBar
+	pager              string
+	pagerArgs          []string
+	isUninterpreted    bool
+	lineTerminator     string
+	specialTerminators []string
+	backSlashCmds      []string
+	quitKeywords       []string
 	contextValues
 	Actions
 }
@@ -73,7 +74,10 @@ type UninterpretedConfig struct {
 	ReadlineConfig *readline.Config
 	// The line terminator to use
 	LineTerminator string
-	MysqlShellCmds []string
+	// Terminators which can be used instead of the line terminator.
+	SpecialTerminators []string
+	// Prefix strings for single line commands that don't require a terminator. Backslash commands must start with '\'
+	BackSlashCmds []string
 	// Quit keywords to exit the shell if discovered
 	QuitKeywords []string
 }
@@ -102,7 +106,8 @@ func NewUninterpreted(conf *UninterpretedConfig) *Shell {
 
 	shell.isUninterpreted = true
 	shell.lineTerminator = conf.LineTerminator
-	shell.mysqlShellCmds = conf.MysqlShellCmds
+	shell.specialTerminators = conf.SpecialTerminators
+	shell.backSlashCmds = conf.BackSlashCmds
 	shell.quitKeywords = conf.QuitKeywords
 
 	return shell
@@ -276,7 +281,7 @@ func handleUninterpretedInput(s *Shell, line string) error {
 	// Check for any quit words and exit if found. In handleInputs(), the exit case is handled by a command named "exit"
 	trimmedLine := strings.TrimSpace(line)
 	trimmedLine = strings.TrimRight(trimmedLine, s.lineTerminator)
-	for _, lt := range s.mysqlShellCmds {
+	for _, lt := range s.specialTerminators {
 		trimmedLine = strings.TrimRight(trimmedLine, lt)
 	}
 	for _, keyword := range s.quitKeywords {
@@ -378,8 +383,13 @@ func (s *Shell) readUninterpreted() (string, error) {
 			if strings.HasSuffix(strings.TrimSpace(line), s.lineTerminator) {
 				return false
 			}
-			for _, sc := range s.mysqlShellCmds {
+			for _, sc := range s.specialTerminators {
 				if strings.HasSuffix(strings.TrimSpace(line), sc) {
+					return false
+				}
+			}
+			for _, sc := range s.backSlashCmds {
+				if strings.HasPrefix(strings.TrimSpace(line), sc) {
 					return false
 				}
 			}

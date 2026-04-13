@@ -369,20 +369,17 @@ func (s *Shell) readUninterpreted() (string, error) {
 		lines, err = s.readMultiLinesFunc(func(line string) (keepReading bool) {
 			if firstLine {
 				firstLine = false
-				if matches := delimiterRegex.FindStringSubmatch(line); len(matches) == 2 {
-					s.lineTerminator = matches[1]
-					return false
-				}
-				if strings.HasPrefix(line, "--") {
-					return false
-				}
 				for _, keyword := range s.quitKeywords {
 					if strings.TrimSpace(line) == keyword {
 						return false
 					}
 				}
 			}
-			
+			if matches := delimiterRegex.FindStringSubmatch(line); len(matches) == 2 {
+				s.lineTerminator = matches[1]
+				return false
+			}
+
 			if strings.HasSuffix(strings.TrimSpace(line), s.lineTerminator) {
 				return false
 			}
@@ -538,6 +535,11 @@ func (s *Shell) DeleteCmd(name string) {
 // LineTerminator sets the line terminator to the given one.
 func (s *Shell) LineTerminator() string {
 	return s.lineTerminator
+}
+
+// SetLineTerminator sets the line terminator to the given one.
+func (s *Shell) SetLineTerminator(terminator string) {
+	s.lineTerminator = terminator
 }
 
 // NotFound adds a generic function for all inputs.

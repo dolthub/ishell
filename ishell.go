@@ -1,4 +1,4 @@
-// Package ishell implements an interactive shell. asdfasdfasdf
+// Package ishell implements an interactive shell.
 package ishell
 
 import (

@@ -57,6 +57,7 @@ type Shell struct {
 	historyFile        string
 	autoHelp           bool
 	rawArgs            []string
+	statements         []string
 	progressBar        ProgressBar
 	pager              string
 	pagerArgs          []string
@@ -361,45 +362,12 @@ func (s *Shell) readLine() (line string, err error) {
 
 func (s *Shell) readUninterpreted() (string, error) {
 	s.rawArgs = nil
+	s.statements = nil
 	var lines string
 	var err error
 
 	if s.lineTerminator != "" {
-		firstLine := true
-		lines, err = s.readMultiLinesFunc(func(line string) (keepReading bool) {
-			if firstLine {
-				firstLine = false
-				if matches := delimiterRegex.FindStringSubmatch(line); len(matches) == 2 {
-					s.lineTerminator = matches[1]
-					return false
-				}
-				if strings.HasPrefix(line, "--") {
-					return false
-				}
-				for _, keyword := range s.quitKeywords {
-					if strings.TrimSpace(line) == keyword {
-						return false
-					}
-				}
-			}
-			
-			if strings.HasSuffix(strings.TrimSpace(line), s.lineTerminator) {
-				return false
-			}
-			for _, sc := range s.specialTerminators {
-				if strings.HasSuffix(strings.TrimSpace(line), sc) {
-					return false
-				}
-			}
-			for _, sc := range s.backSlashCmds {
-				if strings.HasPrefix(strings.TrimSpace(line), sc) {
-					return false
-				}
-			}
-
-			return true
-		})
-
+		lines, err = s.readUninterpretedCommand()
 		if err != nil {
 			return "", err
 		}
@@ -435,6 +403,80 @@ func (s *Shell) readUninterpreted() (string, error) {
 
 	s.rawArgs = []string{lines}
 	return lines, nil
+}
+
+// readUninterpretedCommand reads one complete command from a delimiter-based
+// uninterpreted shell using a single streaming scan. It reads the first line,
+// handles the line-level cases that produce no statements (empty input,
+// DELIMITER, leading "--", quit keywords, backslash commands), and otherwise
+// feeds the input through one StreamScanner to collect the command's
+// statements. The statements are stashed in s.statements for delivery on the
+// Context; the returned string is the raw command text (lines joined by "\n").
+func (s *Shell) readUninterpretedCommand() (string, error) {
+	firstLine, err := s.readLine()
+	if err != nil {
+		return firstLine, err
+	}
+
+	trimmed := strings.TrimSpace(firstLine)
+
+	if trimmed == "" {
+		return firstLine, nil
+	}
+
+	if matches := delimiterRegex.FindStringSubmatch(firstLine); len(matches) == 2 {
+		s.lineTerminator = matches[1]
+		return firstLine, nil
+	}
+
+	if strings.HasPrefix(firstLine, "--") {
+		return firstLine, nil
+	}
+
+	for _, keyword := range s.quitKeywords {
+		if trimmed == keyword {
+			return firstLine, nil
+		}
+	}
+
+	for _, sc := range s.backSlashCmds {
+		if strings.HasPrefix(trimmed, sc) {
+			return firstLine, nil
+		}
+	}
+
+	// Scan the input (possibly multi-line) into statements with a single streaming pass.
+	// The reader blocks for continuation lines while the scanner is mid-statement, and
+	// stops at a special terminator (\g/\G).
+	lr := newUninterpretedReader(firstLine, s.readLine, s.reader.setMultiMode, s.specialTerminators)
+	scanner := NewStreamScannerWithDelimiter(lr, s.lineTerminator)
+	// DELIMITER is handled at the line level above; disable in-stream detection
+	// so a short complete statement does not block on the lookahead read.
+	scanner.IgnoreDelimiterStatements()
+	var statements []string
+	for scanner.Scan() {
+		if t := strings.TrimSpace(scanner.Text()); t != "" {
+			statements = append(statements, t)
+		}
+		// The command is complete once the scanner is at a clean boundary with
+		// no further buffered input; stop before triggering a blocking read.
+		if !scanner.InsideQuote() && !scanner.InsideBlockComment() && !scanner.HasBufferedToken() {
+			break
+		}
+	}
+	// Revert to the primary prompt for the next command.
+	s.reader.setMultiMode(false)
+	if lr.aborted {
+		// EOF (e.g. Ctrl-D) arrived at the continuation prompt before the command
+		// was terminated. Discard the partial statement and surface EOF so the
+		// shell handles it as end-of-input rather than executing the fragment.
+		s.statements = nil
+		return "", io.EOF
+	}
+	// DELIMITER is handled at the line level above; the scanner's delimiter is
+	// unchanged here, so there is nothing to sync back.
+	s.statements = statements
+	return lr.Raw(), scanner.Err()
 }
 
 func (s *Shell) read() ([]string, error) {
@@ -825,6 +867,7 @@ func newContext(s *Shell, cmd *Cmd, args []string) *Context {
 		progressBar: copyShellProgressBar(s),
 		Args:        args,
 		RawArgs:     s.rawArgs,
+		Statements:  s.statements,
 		Cmd:         *cmd,
 		contextValues: func() contextValues {
 			values := contextValues{}

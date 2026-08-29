@@ -12,6 +12,12 @@ type Context struct {
 	// RawArgs is unprocessed command arguments.
 	RawArgs []string
 
+	// Statements holds the complete statements parsed from an uninterpreted
+	// command by the configured statement scanner, in order. It is empty for
+	// non-statement input (e.g., slash commands, DELIMITER lines, empty input) and
+	// for interpreted (non-uninterpreted) shells.
+	Statements []string
+
 	// Cmd is the currently executing command. This is empty for NotFound and Interrupt.
 	Cmd Cmd
 

@@ -64,8 +64,10 @@ type Shell struct {
 	lineTerminator     string
 	specialTerminators []string
 	backSlashCmds      []string
-	backSlashFirstOnly bool
-	quitKeywords       []string
+	backSlashAt        func(input, line string) int
+	// pendingCmd stores commands that sit after a statement on the same line.
+	pendingCmd   string
+	quitKeywords []string
 	contextValues
 	Actions
 }
@@ -79,9 +81,9 @@ type UninterpretedConfig struct {
 	SpecialTerminators []string
 	// Prefix strings for single line commands that don't require a terminator. Backslash commands must start with '\'
 	BackSlashCmds []string
-	// If set, only the first line of input is checked against BackSlashCmds, so a backslash line inside a
-	// statement, such as one inside a quoted string, does not end the input.
-	BackSlashCmdsFirstLineOnly bool
+	// BackSlashCmdAt returns the byte offset in |line| where a backslash command
+	// starts, or -1. |input| is the earlier lines of a statement.
+	BackSlashCmdAt func(input, line string) int
 	// Quit keywords to exit the shell if discovered
 	QuitKeywords []string
 }
@@ -112,7 +114,7 @@ func NewUninterpreted(conf *UninterpretedConfig) *Shell {
 	shell.lineTerminator = conf.LineTerminator
 	shell.specialTerminators = conf.SpecialTerminators
 	shell.backSlashCmds = conf.BackSlashCmds
-	shell.backSlashFirstOnly = conf.BackSlashCmdsFirstLineOnly
+	shell.backSlashAt = conf.BackSlashCmdAt
 	shell.quitKeywords = conf.QuitKeywords
 
 	return shell
@@ -372,13 +374,6 @@ func (s *Shell) readUninterpreted() (string, error) {
 	if s.lineTerminator != "" {
 		firstLine := true
 		lines, err = s.readMultiLinesFunc(func(line string) (keepReading bool) {
-			if firstLine || !s.backSlashFirstOnly {
-				for _, sc := range s.backSlashCmds {
-					if strings.HasPrefix(strings.TrimSpace(line), sc) {
-						return false
-					}
-				}
-			}
 			if firstLine {
 				firstLine = false
 				if matches := delimiterRegex.FindStringSubmatch(line); len(matches) == 2 {
@@ -394,7 +389,7 @@ func (s *Shell) readUninterpreted() (string, error) {
 					}
 				}
 			}
-			
+
 			if strings.HasSuffix(strings.TrimSpace(line), s.lineTerminator) {
 				return false
 			}
@@ -403,6 +398,12 @@ func (s *Shell) readUninterpreted() (string, error) {
 					return false
 				}
 			}
+			for _, sc := range s.backSlashCmds {
+				if strings.HasPrefix(strings.TrimSpace(line), sc) {
+					return false
+				}
+			}
+
 			return true
 		})
 
@@ -489,18 +490,41 @@ func (s *Shell) read() ([]string, error) {
 }
 
 func (s *Shell) readMultiLinesFunc(f func(string) (keepReading bool)) (string, error) {
-	var lines bytes.Buffer
+	// strings.Builder.String does not copy, so backSlashAt can take it per line.
+	var lines strings.Builder
 	currentLine := 0
 	var err error
+	cmd := s.pendingCmd
+	s.pendingCmd = ""
 	for {
+		if cmd != "" {
+			if err := handleUninterpretedInput(s, cmd); err != nil {
+				s.Println("Error:", err)
+			}
+			cmd = ""
+			if strings.TrimSpace(lines.String()) == "" {
+				lines.Reset()
+				break
+			}
+		}
 		if currentLine == 1 {
 			// from second line, enable next line prompt.
 			s.reader.setMultiMode(true)
 		}
 		var line string
 		line, err = s.readLine()
+		if err == nil && s.backSlashAt != nil {
+			if at := s.backSlashAt(lines.String(), line); at >= 0 {
+				cmd, line = line[at:], line[:at]
+			}
+		}
+		if cmd != "" && strings.TrimSpace(line) == "" {
+			continue
+		}
 		fmt.Fprint(&lines, line)
 		if !f(line) || err != nil {
+			// The statement ended before the command, so the command runs after it.
+			s.pendingCmd = cmd
 			break
 		}
 		fmt.Fprintln(&lines)
